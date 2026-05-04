@@ -91,13 +91,14 @@ fig = px.scatter_mapbox(
     hover_name="amphoe",
     hover_data=["province", "amphoe", "log_pm25"],
     color_continuous_scale="Reds",
-    range_color=[50, 600],
-    zoom=5,
-    height=500
+    range_color=[0, 200],
+    zoom=5.5,
+    height=700
 )
 
 fig.update_layout(
-    clickmode='event+select',
+    coloraxis_showscale=False,
+    # clickmode='event+select',
     mapbox_style="open-street-map", 
     mapbox_center=map_center, 
     margin={"r":0,"t":0,"l":0,"b":0}

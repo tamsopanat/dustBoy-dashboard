@@ -27,14 +27,48 @@ selected_date = st.sidebar.selectbox("Select Date", available_dates)
 # Step A: Filter stations for the date and PM2.5 > 50
 high_pollution_stations = station_df[
     (station_df['date'] == selected_date) & (station_df['log_pm25'] > 50)
-]
+].copy()
 high_pollution_stations['pm25_visual'] = high_pollution_stations['log_pm25'].clip(upper=600)
+high_pollution_stations = high_pollution_stations.reset_index(drop=True)
 
-# Step B: Get unique list of affected Amphoes
-affected_amphoes = high_pollution_stations['amphoe'].unique()
 
-# Step C: Merge Patient data with Station data based on Amphoe
-# This identifies patients living in the high PM2.5 districts
+if "selected_province" not in st.session_state:
+    st.session_state.selected_province = None
+if "selected_amphoe" not in st.session_state:
+    st.session_state.selected_amphoe = None
+if "selected_indices" not in st.session_state:
+    st.session_state.selected_indices = None
+
+st.sidebar.header("⚠️ Critical Areas (> 50)")
+critical_list = sorted(high_pollution_stations['amphoe'].unique())
+
+if not critical_list:
+    st.sidebar.success("No areas exceed 50 PM2.5")
+else:
+    provinces = sorted(high_pollution_stations['province'].unique())
+    p_index = None
+    if st.session_state.get("selected_province") in provinces:
+        p_index = provinces.index(st.session_state.selected_province)
+    sb_province = st.sidebar.selectbox(
+        "1. Select province:",
+        options=provinces,
+        index=p_index,
+    )
+    st.session_state.selected_province = sb_province
+    if sb_province:
+        available_amphoes = sorted(
+            high_pollution_stations[high_pollution_stations['province'] == sb_province]['amphoe'].unique()
+        )
+        a_index = None
+        if st.session_state.get("selected_amphoe") in available_amphoes:
+            a_index = available_amphoes.index(st.session_state.selected_amphoe)            
+        sb_amphoe = st.sidebar.selectbox(
+            f"2. Select amphoe in {sb_province}:",
+            options=available_amphoes,
+            index=a_index,
+        )
+        st.session_state.selected_amphoe = sb_amphoe
+
 final_df = pd.merge(
     high_pollution_stations, 
     patient_df, 
@@ -44,12 +78,12 @@ final_df = pd.merge(
 
 # 5. UI Layout
 st.title("🏥 PM2.5 & Patient Risk Dashboard")
-st.info(f"On **{selected_date}**: Found **{len(affected_amphoes)}** amphoes with PM2.5 more than 50.")
+st.info(f"On **{selected_date}**: Found **{len(critical_list)}** amphoes with PM2.5 more than 50.")
 
 st.subheader("📍 PM2.5 Map")
 map_center = {"lat": station_df['location_lat'].mean(), "lon": station_df['location_lon'].mean()}
 fig = px.scatter_mapbox(
-    high_pollution_stations if not high_pollution_stations.empty else None,
+    high_pollution_stations,
     lat="location_lat",
     lon="location_lon",
     color="log_pm25",
@@ -58,43 +92,61 @@ fig = px.scatter_mapbox(
     hover_data=["province", "amphoe", "log_pm25"],
     color_continuous_scale="Reds",
     range_color=[50, 600],
-    zoom=6.5,
+    zoom=5,
     height=500
 )
 
-# 3. Apply styling (This runs even if the dataframe is empty)
 fig.update_layout(
+    clickmode='event+select',
     mapbox_style="open-street-map", 
     mapbox_center=map_center, 
     margin={"r":0,"t":0,"l":0,"b":0}
 )
 
+if st.session_state.get("selected_amphoe"):
+    print(f"Selected Amphoe: {st.session_state.selected_amphoe}, Province: {st.session_state.selected_province}")
+    matched_rows = high_pollution_stations[
+        (high_pollution_stations['amphoe'] == st.session_state.selected_amphoe) & 
+        (high_pollution_stations['province'] == st.session_state.selected_province)
+    ]
+    print(matched_rows)
+    
+    st.session_state.selected_indices = matched_rows.index.tolist()
+
 if not high_pollution_stations.empty:
     fig.update_traces(
+        selectedpoints=st.session_state.selected_indices,
         hovertemplate='<b>อ.%{hovertext} จ.%{customdata[0]}</b><br>PM2.5: %{customdata[2]:.0f}',
         selected_marker_opacity=1.0,
         unselected_marker_opacity=0.35
     )
 else:
     fig.add_annotation(text="No high pollution areas detected", 
-                  showarrow=False, font_size=20)
+                       showarrow=False, font_size=20)
 
-event = st.plotly_chart(fig, on_select="rerun", use_container_width=True)
-print(event)
+event = st.plotly_chart(fig, on_select="rerun", width='stretch')
 
 if event and "selection" in event and event["selection"]["points"]:
-    selected_amphoe = event["selection"]["points"][0]["hovertext"]
-    selected_province = event["selection"]["points"][0]["customdata"][0]
-    st.info(f"Showing risk patients in: **อ.{selected_amphoe} จ.{selected_province}**")
+    point = event["selection"]["points"][0]
+    map_amphoe = point["customdata"][1]
+    map_province = point["customdata"][0]
     
-    # 3. Filter your patient dataframe based on the click
-    display_df = final_df[final_df['amphoe'] == selected_amphoe][['cid', 'age', 'sex']]
+    if st.session_state.selected_amphoe != map_amphoe and st.session_state.selected_province != map_province:
+        st.session_state.selected_amphoe = map_amphoe
+        st.session_state.selected_province = map_province
+        st.rerun()
+        
+if st.session_state.selected_amphoe:
+    st.info(f"Showing risk patients in: **อ.{st.session_state.selected_amphoe} จ.{st.session_state.selected_province}**")
+    
+    display_df = final_df[
+        (final_df['amphoe'] == st.session_state.selected_amphoe) & (final_df['province'] == st.session_state.selected_province)
+    ][['cid', 'age', 'sex']].drop_duplicates()
     
     if not display_df.empty:
-        st.dataframe(display_df, use_container_width=True)
+        st.dataframe(display_df, width='stretch')
     else:
-        st.write(f"No patient data found for {selected_amphoe}.")
+        st.write(f"No patient data found")
 
 else:
-    # Default state when nothing is clicked
-    st.write("Click a station on the map to view local patient data.")
+    st.write("📍 Click a station on the map or select from the sidebar to view risk patient data.")
